@@ -1,0 +1,3 @@
+- insert:
+    - id: quick-explain
+      name: '@local/quick-explain'
