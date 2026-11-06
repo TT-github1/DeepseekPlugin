@@ -1,0 +1,8 @@
+# dsh-android-mirror-pane 的 bundle patch：只插入一行插件，不动 profile 里的其它任何东西。
+#
+# 可选 config：
+#   serial: '<serial>'        # 固定设备序列号；不写则用 ANDROID_SERIAL 或 adb devices 里第一个 online 设备
+#   adb: '/path/to/adb'       # 指定 adb 可执行文件；不写则按 PATH 与 Android SDK 默认路径查找
+- insert:
+    - id: android-mirror-pane
+      name: dsh-android-mirror-pane

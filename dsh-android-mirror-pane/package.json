@@ -1,0 +1,37 @@
+{
+  "name": "dsh-android-mirror-pane",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Android 投屏与操控面板：在 DSH 右侧栏实时显示真机画面，支持点击、拖拽与截图",
+  "type": "module",
+  "main": "index.js",
+  "exports": {
+    ".": "./index.js",
+    "./client": "./client.js",
+    "./cordis.patch.yml": "./cordis.patch.yml",
+    "./package.json": "./package.json"
+  },
+  "dependencies": {
+    "@deepseek-ai/dsh-tools": "0.2.2-rc.1"
+  },
+  "dsh": {
+    "bundle": {
+      "patch": "./cordis.patch.yml"
+    },
+    "client": {
+      "platform": "web",
+      "immediately": true,
+      "inject": [
+        "@deepseek-ai/dsh-client-ui-sidebar-right"
+      ]
+    }
+  },
+  "files": [
+    "index.js",
+    "client.js",
+    "cordis.patch.yml",
+    "src",
+    "locale",
+    "vendor/scrcpy-server"
+  ]
+}
