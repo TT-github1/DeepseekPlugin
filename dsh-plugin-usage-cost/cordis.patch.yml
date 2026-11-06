@@ -1,0 +1,6 @@
+# Local bundle: a live token-usage + cost readout under the composer.
+# Row `usage-cost` loads this package's host half (an empty apply) and, through
+# package.json `dsh.client`, its browser half into the composer dock.
+- insert:
+    - id: usage-cost
+      name: dsh-plugin-usage-cost
