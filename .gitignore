@@ -1,0 +1,13 @@
+# 依赖目录（各插件按需手动建立，不提交）
+node_modules/
+
+# 系统与编辑器噪声
+.DS_Store
+*.swp
+.idea/
+.vscode/
+
+# 本地备份文件
+*.bak
+*.bak-*
+*.bak.*
