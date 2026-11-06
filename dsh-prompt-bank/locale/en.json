@@ -1,0 +1,6 @@
+{
+  "meta": {
+    "title": "Prompt library",
+    "description": "Adds a button beside the composer that inserts a saved prompt into the draft."
+  }
+}
