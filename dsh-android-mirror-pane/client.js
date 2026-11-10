@@ -1298,6 +1298,68 @@ if (window.__DAMP_LOADED__ !== true) {
           const [treeError, setTreeError] = React.useState(null)
           const [hover, setHover] = React.useState(null)
           const [showAll, setShowAll] = React.useState(false)
+          const stageRef = React.useRef(null)
+          const imgRef = React.useRef(null)
+          /* 图片在容器里的实际绘制区域（相对容器左上角）。
+             必须实测而不是用百分比：图片是 object-fit:contain 居中的，
+             容器比例与图不一致时上下/左右会有留白，按容器百分比算就会整体偏移。 */
+          const [imageBox, setImageBox] = React.useState(null)
+
+          /* 图片地址要在下面的 effect 依赖里用到，必须先定义——
+             之前放在后面导致 TDZ 报错、整个面板白屏。 */
+          const imageUrl = entry.hasImage
+            ? `${ROUTE}/preview/image?${sessionQuery(sessionId)}&key=${encodeURIComponent(entry.key)}&v=${entry.renderedAt ?? 0}`
+            : undefined
+
+          const measureImage = React.useCallback(() => {
+            const stage = stageRef.current
+            const img = imgRef.current
+            if (stage === null || img === null) return
+            if (img.naturalWidth < 1 || img.naturalHeight < 1) return
+            const stageRect = stage.getBoundingClientRect()
+            const imgRect = img.getBoundingClientRect()
+            if (imgRect.width < 1 || imgRect.height < 1) return
+            /* 基准换算：getBoundingClientRect 从 border 外沿量起，而
+               `.damp-pvbox` 是 position:absolute，它的包含块是最近定位祖先的
+               **padding box**（即 border 内沿，不含 border）。实测验证：
+               容器 padding:3px、无 border 时，left:0 的绝对定位子元素落在 (0,0)，
+               而不是 (3,3)——所以只需减 border，**不能减 padding**，
+               多减一个 padding 就会让框恒定偏移。 */
+            const style = window.getComputedStyle(stage)
+            const borderLeft = Number.parseFloat(style.borderLeftWidth) || 0
+            const borderTop = Number.parseFloat(style.borderTopWidth) || 0
+            setImageBox({
+              /* 加上滚动偏移：容器可滚动时 getBoundingClientRect 是视口坐标。 */
+              left: imgRect.left - stageRect.left + stage.scrollLeft - borderLeft,
+              top: imgRect.top - stageRect.top + stage.scrollTop - borderTop,
+              width: imgRect.width,
+              height: imgRect.height,
+              naturalWidth: img.naturalWidth,
+              naturalHeight: img.naturalHeight,
+            })
+          }, [])
+
+          /* 图加载完、容器尺寸变化、窗口缩放都要重测，否则框会停在旧位置。 */
+          React.useEffect(() => {
+            const stage = stageRef.current
+            const img = imgRef.current
+            measureImage()
+            if (img !== null) {
+              if (img.complete) measureImage()
+              img.addEventListener('load', measureImage)
+            }
+            const observer = typeof ResizeObserver === 'undefined' ? undefined : new ResizeObserver(measureImage)
+            if (observer !== undefined) {
+              if (stage !== null) observer.observe(stage)
+              if (img !== null) observer.observe(img)
+            }
+            window.addEventListener('resize', measureImage)
+            return () => {
+              if (img !== null) img.removeEventListener('load', measureImage)
+              observer?.disconnect()
+              window.removeEventListener('resize', measureImage)
+            }
+          }, [measureImage, imageUrl])
 
           /* 树与图一起失效：重新渲染后 renderedAt 变，两个 URL 都要跟着换。 */
           React.useEffect(() => {
@@ -1313,24 +1375,26 @@ if (window.__DAMP_LOADED__ !== true) {
             return () => { alive = false }
           }, [entry.key, entry.renderedAt, sessionId])
 
-          const imageUrl = entry.hasImage
-            ? `${ROUTE}/preview/image?${sessionQuery(sessionId)}&key=${encodeURIComponent(entry.key)}&v=${entry.renderedAt ?? 0}`
-            : undefined
-
           /* 默认只显示有语义的节点：实测 headless 77 个节点里只有 16 个带语义，
              整棵铺开反而找不到要看的那几行。 */
           const nodes = tree?.nodes ?? []
           const visible = showAll ? nodes : nodes.filter((node) => node.hasSemantics === true)
-          const scaleX = tree?.width ? 100 / tree.width : 0
-          const scaleY = tree?.height ? 100 / tree.height : 0
-          const box = hover === null || tree === null
+          /* 坐标基准取语义树自己的画布尺寸（bounds 就在这个坐标系里），
+             再乘「图片实际显示宽度 / 基准宽度」换算成屏幕像素。 */
+          const baseWidth = tree?.width > 0 ? tree.width : imageBox?.naturalWidth ?? 0
+          const baseHeight = tree?.height > 0 ? tree.height : imageBox?.naturalHeight ?? 0
+          const box = hover === null || imageBox === null || baseWidth < 1 || baseHeight < 1
             ? null
-            : {
-              left: `${hover.bounds.left * scaleX}%`,
-              top: `${hover.bounds.top * scaleY}%`,
-              width: `${(hover.bounds.right - hover.bounds.left) * scaleX}%`,
-              height: `${(hover.bounds.bottom - hover.bounds.top) * scaleY}%`,
-            }
+            : (() => {
+              const scaleX = imageBox.width / baseWidth
+              const scaleY = imageBox.height / baseHeight
+              return {
+                left: `${Math.round(imageBox.left + hover.bounds.left * scaleX)}px`,
+                top: `${Math.round(imageBox.top + hover.bounds.top * scaleY)}px`,
+                width: `${Math.max(1, Math.round((hover.bounds.right - hover.bounds.left) * scaleX))}px`,
+                height: `${Math.max(1, Math.round((hover.bounds.bottom - hover.bounds.top) * scaleY))}px`,
+              }
+            })()
 
           const statusText = job?.status === 'running'
             ? L('pv.running')
@@ -1360,10 +1424,10 @@ if (window.__DAMP_LOADED__ !== true) {
               }, `${L('pv.errorTitle')}：${entry.lastError}`)
               : null,
             h('div', { className: 'damp-pvdetail' },
-              h('div', { className: 'damp-pvstage' },
+              h('div', { className: 'damp-pvstage', ref: stageRef },
                 imageUrl === undefined
                   ? h('div', { className: 'damp-empty' }, L('pv.noImage'))
-                  : h('img', { src: imageUrl, alt: entry.title }),
+                  : h('img', { src: imageUrl, alt: entry.title, ref: imgRef }),
                 box === null ? null : h('div', { className: 'damp-pvbox', style: box }),
               ),
               h('div', { className: 'damp-pvtree' },
