@@ -2,7 +2,7 @@
   "name": "dsh-android-mirror-pane",
   "version": "0.1.0",
   "private": true,
-  "description": "Android 投屏与操控面板：在 DSH 右侧栏实时显示真机画面，支持点击、拖拽与截图",
+  "description": "Android 投屏与 Compose 预览面板：右侧栏实时显示真机画面并支持点击、拖拽、截图；另有一个 tab 扫描、渲染项目里的 @Preview，出图带语义树与前后版本差异",
   "type": "module",
   "main": "index.js",
   "scripts": {
@@ -37,6 +37,8 @@
     "cordis.patch.yml",
     "src",
     "locale",
+    "tools",
+    "test",
     "vendor/scrcpy-server"
   ]
 }

@@ -8,9 +8,38 @@
 | 目录 | 包名 | 说明 |
 |---|---|---|
 | `dsh-plugin-usage-cost/` | `dsh-plugin-usage-cost` | 输入框 dock 上实时显示 token 用量与估算花费 |
-| `dsh-android-mirror-pane/` | `dsh-android-mirror-pane` | 右侧栏 Android 投屏与操控面板 |
+| `dsh-android-mirror-pane/` | `dsh-android-mirror-pane` | 右侧栏 Android 面板：真机投屏操控 + Compose `@Preview` 预览 |
 | `dsh-prompt-bank/` | `dsh-prompt-bank` | 输入框左侧提示词库，点一下插入草稿 |
 | `quick-explain/` | `@local/quick-explain` | 选中文本右键就地解释 |
+
+## dsh-android-mirror-pane
+
+右栏三个 tab。
+
+**画面** —— 真机实时投屏，支持点击、拖拽、截图。
+
+**日志** —— adb logcat，可按级别与关键词过滤。
+
+**预览** —— 扫描项目里的 Compose `@Preview` 并渲染成图。
+
+这一栏的设计取舍值得记一笔，因为它不是"把 @Preview 全渲染一遍"：
+
+- **不预渲染**。一个模块几十个 preview，全渲染要几分钟。总览页只读索引、按需渲染，
+  卡片上的圆点标出三种状态：绿=图是最新、黄=源码已变、灰=从未渲染。
+- **懒渲染**。点进详情才真正跑 Gradle。此时显示渲染图 + 语义树，悬停树上任一行，
+  图上会框出对应的 `bounds`。
+- **两条渲染路径**。Studio 开着就走 `android studio render-compose-preview`（约 3 秒，
+  语义树里是 `TextView`/`Button` 这种可读名字）；否则走 headless（约 5 秒，语义树是
+  Compose 内部结构）。声明了 `productFlavors` 的模块**只能用 Studio**——CLI 的 headless
+  路径会硬编码找 `debug` 变体，而实际可能叫 `StandardDebug`。
+- **改了什么看得见**。「对比上一版」会比对两次渲染的语义树，报出哪些文字变了、
+  哪些位移了，比盯图可靠——3 个像素的挪动人眼很难发现。
+
+配置不写也能用，全部有默认值；要改见 `dsh-android-mirror-pane/cordis.patch.yml` 顶部的注释。
+
+模型也能用它：`android_preview_list` 列出有哪些 preview，`android_preview_render`
+渲染指定的那个并把图交回给模型。
+
 
 ## 换电脑后怎么恢复
 
