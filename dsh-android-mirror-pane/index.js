@@ -152,6 +152,9 @@ export function apply(ctx, config) {
       androidCli: previewConfig.androidCli,
       renderer: previewConfig.renderer,
       studioProject: previewConfig.studioProject,
+      /* 缓存上限：不配就走 PreviewService 的默认值（300 MB）。
+         0 表示关闭自动清理，只靠手动 forget。 */
+      maxCacheMb: previewConfig.maxCacheMb,
     },
     logger,
   })
@@ -159,8 +162,8 @@ export function apply(ctx, config) {
   /* agent 工具：注册在插件顶层，headless 环境里也能用。 */
   ctx.effect(() => {
     const dispose = () => service.dispose()
-    registerTools(ctx, { adb, serial: options.serial, service })
-    logger.info?.('[android-mirror-pane] 已注册 agent 工具：android_screenshot / android_logcat / android_tap / android_swipe / android_devices')
+    registerTools(ctx, { adb, serial: options.serial, service, preview: hub })
+    logger.info?.('[android-mirror-pane] 已注册 agent 工具：android_screenshot / android_logcat / android_tap / android_swipe / android_devices / android_preview_list / android_preview_render')
     return dispose
   }, 'android-mirror-pane: agent 工具')
 

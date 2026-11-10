@@ -21,7 +21,7 @@
 import { createHash } from 'node:crypto'
 import { declaresFlavors, describeScan, extractPreviewFqns, repoLabel, scanPreviewModules } from './discover.js'
 import { existsSync } from 'node:fs'
-import { mkdir, readdir, readFile, rename, rm, unlink, writeFile } from 'node:fs/promises'
+import { mkdir, readdir, readFile, rename, rm, stat, unlink, writeFile } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join, relative, resolve, sep } from 'node:path'
 import { execFile } from 'node:child_process'
@@ -52,6 +52,41 @@ const RENDER_TIMEOUT_MS = 300_000
 
 /** `preview list` 超时：它要配置 Gradle，比渲染短得多。 */
 const LIST_TIMEOUT_MS = 120_000
+
+/** 队列历史的保留条数（不含正在排队的任务与当前批次）。 */
+const MAX_JOB_HISTORY = 20
+
+/** 批次记录的保留条数：面板只需要看最近几批，太老的历史没有意义。 */
+const MAX_BATCH_HISTORY = 8
+
+/** 缓存目录默认上限（MB）。单个 preview 的 png + json 实测约 0.2–1 MB。 */
+const DEFAULT_MAX_CACHE_MB = 300
+
+/** 缓存文件名：`img-<sha1 前 16 位>.png` 与 `tree-<sha1 前 16 位>.json`。 */
+const CACHE_FILE_RE = /^(img|tree)-([0-9a-f]+)\.(png|json)$/
+
+/**
+ * 把一组 job 汇总成进度。
+ *
+ * 前端算进度不能靠 `jobs` 数组的长度：队列只保留有限条历史，一次 42 个的
+ * 批量渲染会把更早的条目挤掉，于是「总数」在跑到一半时会莫名其妙变小。
+ * 所以聚合值由这一层给，前端只管显示。
+ *
+ * @param {{ status?: string }[]} jobs
+ * @returns {{ total: number, queued: number, running: number, done: number, failed: number, cancelled: number, finished: number, percent: number }}
+ */
+export function summarizeJobs(jobs) {
+  const summary = { total: jobs.length, queued: 0, running: 0, done: 0, failed: 0, cancelled: 0 }
+  for (const job of jobs) {
+    if (job.status === 'queued') summary.queued += 1
+    else if (job.status === 'running') summary.running += 1
+    else if (job.status === 'done') summary.done += 1
+    else if (job.status === 'error') summary.failed += 1
+    else if (job.status === 'cancelled') summary.cancelled += 1
+  }
+  const finished = summary.done + summary.failed + summary.cancelled
+  return { ...summary, finished, percent: summary.total === 0 ? 0 : Math.round((finished / summary.total) * 100) }
+}
 
 /**
  * 短哈希，用于缓存文件名。
@@ -487,9 +522,15 @@ export class PreviewService {
   /** 最近一次扫描实际处理的模块（含 flavored 标记）。 */
   #scannedModules = []
   #jobs = new Map()
+  /** 批次号 → 进度摘要；批量渲染时前端靠它显示「已跑 12/42」。 */
+  #batches = new Map()
   #queue = Promise.resolve()
   #activeChild = undefined
   #disposed = false
+  /** 缓存上限（字节）；0 表示不限制。 */
+  #maxCacheBytes = DEFAULT_MAX_CACHE_MB * 1024 * 1024
+  /** 正在跑的清理 Promise，避免两次渲染完成同时扫目录互相覆盖索引。 */
+  #trimming = undefined
   #studioProbe = { at: 0, value: undefined }
   #scan = { running: false, startedAt: 0, finishedAt: 0, error: undefined, cliAvailable: undefined }
 
@@ -500,6 +541,8 @@ export class PreviewService {
    *   androidCli?: string,
    *   renderer?: 'auto' | 'headless' | 'studio',
    *   studioProject?: string,
+   *   maxCacheMb?: number,
+   *   cacheDir?: string,
    *   logger?: any,
    * }} options
    */
@@ -540,13 +583,27 @@ export class PreviewService {
     this.#renderer = options.renderer === 'headless' || options.renderer === 'studio' ? options.renderer : 'auto'
     this.#studioProject = typeof options.studioProject === 'string' && options.studioProject.length > 0 ? options.studioProject : undefined
     this.#logger = options.logger ?? console
-    /* 缓存按项目分目录：不同仓库的 preview 同名不同图，混在一个目录里会串。 */
-    this.#dir = join(homedir(), '.dsh', CACHE_ROOT, shortHash(this.#projectRoot, 12))
+    /* 缓存上限：不配置就用默认值；显式给 0 表示不清理（给排障留一条后路）。 */
+    const maxCacheMb = Number(options.maxCacheMb)
+    this.#maxCacheBytes = Number.isFinite(maxCacheMb) && maxCacheMb >= 0
+      ? Math.floor(maxCacheMb * 1024 * 1024)
+      : DEFAULT_MAX_CACHE_MB * 1024 * 1024
+    /* 缓存按项目分目录：不同仓库的 preview 同名不同图，混在一个目录里会串。
+       `cacheDir` 只给单测与特殊部署用——单测必须能指向临时目录，
+       绝不能碰用户真实的 ~/.dsh/android-mirror-pane/。 */
+    this.#dir = typeof options.cacheDir === 'string' && options.cacheDir.length > 0
+      ? resolve(options.cacheDir.replace(/^~(?=$|\/)/, homedir()))
+      : join(homedir(), '.dsh', CACHE_ROOT, shortHash(this.#projectRoot, 12))
   }
 
   /** 缓存目录。 */
   get directory() {
     return this.#dir
+  }
+
+  /** 缓存上限（MB）；0 表示不清理。 */
+  get maxCacheMb() {
+    return this.#maxCacheBytes === 0 ? 0 : Math.round(this.#maxCacheBytes / 1024 / 1024)
   }
 
   /** 被扫描的安卓项目根目录。 */
@@ -650,13 +707,256 @@ export class PreviewService {
     return join(this.#dir, `tree-${shortHash(key)}.json`)
   }
 
+  /** 上一版语义树的路径，供 diff 当基线用。 */
+  baselineTreePath(key) {
+    return join(this.#dir, `base-${shortHash(key)}.json`)
+  }
+
+  /**
+   * 写入语义树，并把当前版本轮转成基线。
+   *
+   * 为什么单独抽出来：headless 与 studio 两条渲染路径各写一次树，
+   * 如果只在一处轮转，用另一条路径渲染的 preview 就永远没有基线、
+   * diff 永远显示「首次渲染」。轮转必须先做（把旧树改名成 base-），
+   * 再写新树，否则新旧会互相覆盖。
+   *
+   * @param {string} key
+   * @param {object} tree
+   */
+  async #writeTree(key, tree) {
+    const current = this.treePath(key)
+    /* 旧的当前树成为新基线。读失败（文件不存在/损坏）不算错，
+       只是这次 diff 没有基线可用。 */
+    try {
+      const previous = await readFile(current, 'utf8')
+      await writeFile(this.baselineTreePath(key), previous, 'utf8')
+    } catch {
+      /* 没有上一版：保持基线缺省。 */
+    }
+    await writeFile(current, JSON.stringify(tree), 'utf8')
+  }
+
+  /**
+   * 读上一版语义树，作为 diff 的基线。
+   * @param {string} key
+   * @returns {Promise<object | undefined>}
+   */
+  async readBaselineTree(key) {
+    try {
+      const text = await readFile(this.baselineTreePath(key), 'utf8')
+      const parsed = JSON.parse(text)
+      return parsed !== null && typeof parsed === 'object' ? parsed : undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * 建立「缓存文件名里的短哈希 → key」的反查表。
+   *
+   * 文件名只存 sha1 前 16 位，反查只能拿索引里的 key 逐个算哈希。索引量级是
+   * 几十到几百条，一次扫描建表远比逐文件遍历索引便宜。
+   *
+   * @returns {Map<string, string>}
+   */
+  #hashToKey() {
+    const map = new Map()
+    for (const key of this.#entries.keys()) map.set(shortHash(key), key)
+    return map
+  }
+
+  /**
+   * 某个缓存文件当前是否被引用——被引用的不能删。
+   *
+   * 三类「被引用」，任一命中就不动它：
+   * 1. 索引里状态为 `fresh` 的条目：它就是「现在看到的是最新」的那张图，
+   *    删掉之后卡片变灰底，用户会以为渲染结果丢了。
+   * 2. 队列里 queued / running 的 job 的 key：文件正在写或马上要写，
+   *    此时删掉会和写入抢同一个路径。
+   * 3. 还在跑的批次里的 key：它们马上要入队，属于同一批的「即将写入」。
+   *
+   * 状态是 `stale` / `error` / `never` 的条目**不** pin：它们要么源码已变、
+   * 要么从未渲染成功，文件留着也只是过期图，正是 LRU 该淘汰的对象；
+   * 淘汰之后靠 `list()` 现场 `existsSync` 判定 `hasImage`，卡片仍在。
+   *
+   * @param {string} key
+   * @returns {boolean}
+   */
+  #isKeyPinned(key) {
+    for (const job of this.#jobs.values()) {
+      if (job.key === key && (job.status === 'queued' || job.status === 'running')) return true
+    }
+    for (const batch of this.#batches.values()) {
+      if (batch.running === true && batch.keys.includes(key)) return true
+    }
+    const entry = this.#entries.get(key)
+    if (entry === undefined) return false
+    return this.#statusOf(entry) === 'fresh'
+  }
+
+  /**
+   * 清理缓存到上限以内：按文件 mtime 最旧的先删。
+   *
+   * 什么时候跑很关键：
+   * - **不在 `list()` 里跑**。list 是首屏高频路径（面板有任务时每 1.5 秒轮询），
+   *   扫目录 + 每个文件一次 stat，在几千个文件时会拖到几百毫秒，首屏 1 秒预算
+   *   会被吃掉。
+   * - **在渲染成功后跑**。渲染成功是唯一会让目录变大的动作（一次多出 png + json），
+   *   所以「刚写完就顺手清」既不在首屏挡路，也只在上限真的被突破时才生效；
+   *   此刻用户正在等图，多几十毫秒无感。失败路径不跑：那时没有新文件（中间
+   *   产物已在 `#renderWithHeadless` 的 finally 里删掉），扫一遍目录纯属浪费。
+   *
+   * LRU 的「用」用文件 mtime 表示：`GET /preview/image` 走的是 readFile，
+   * 不会刷新 mtime（也不该刷新——刷新要额外 utimes，而看列表时会一次拉几十张图，
+   * 那才是高频路径）。所以语义是「按最近一次写入时间淘汰」，对 preview 缓存
+   * 够用：一个 preview 被重渲染就会写新文件，mtime 自然变新。
+   *
+   * @param {{ force?: boolean }} [options] - `force` 跳过「正在清理」的去重（单测用）。
+   * @returns {Promise<{ removed: number, freed: number, total: number, max: number }>}
+   */
+  async trimCache(options = {}) {
+    await this.#load()
+    if (this.#maxCacheBytes === 0) return { removed: 0, freed: 0, total: 0, max: 0 }
+    /* 串行化：两次渲染完成可能几乎同时触发清理，并发扫目录会让两边都基于
+       同一份旧索引做删除，最后落盘的可能是被覆盖掉的状态。 */
+    if (options.force === true) return this.#trimCacheOnce()
+    if (this.#trimming !== undefined) return this.#trimming
+    this.#trimming = this.#trimCacheOnce().finally(() => { this.#trimming = undefined })
+    return this.#trimming
+  }
+
+  /**
+   * `trimCache` 的实际步骤。
+   * @returns {Promise<{ removed: number, freed: number, total: number, max: number }>}
+   */
+  async #trimCacheOnce() {
+    let filenames
+    try {
+      filenames = await readdir(this.#dir)
+    } catch {
+      /* 目录还不存在：没有可清理的东西。 */
+      return { removed: 0, freed: 0, total: 0, max: this.#maxCacheBytes }
+    }
+    /** @type {{ path: string, size: number, atime: number, mtime: number, kind: string, hash: string }[]} */
+    const files = []
+    let total = 0
+    for (const name of filenames) {
+      const match = CACHE_FILE_RE.exec(name)
+      /* 认不出来的文件（index.json、`.index-*.tmp`、render-* 中间目录、
+         用户自己放的东西）一律不碰：删错了没法恢复。 */
+      if (match === null) continue
+      /* 前后缀必须配对：`img-x.json` 之类不是本服务的产物。 */
+      if (match[1] === 'img' && match[3] !== 'png') continue
+      if (match[1] === 'tree' && match[3] !== 'json') continue
+      const path = join(this.#dir, name)
+      let info
+      try {
+        info = await stat(path)
+      } catch {
+        continue
+      }
+      if (info.isFile() !== true) continue
+      total += info.size
+      files.push({ path, size: info.size, atime: info.atimeMs, mtime: info.mtimeMs, kind: match[1], hash: match[2] })
+    }
+    if (total <= this.#maxCacheBytes) return { removed: 0, freed: 0, total, max: this.#maxCacheBytes }
+
+    /* 判「哪些是 fresh（不许删）」要靠模块指纹，而指纹只有 list() 走过之后才有。
+       这里对缺指纹的模块现算一次——**只在超限时**发生（大多数渲染根本走不到
+       这一行），算的是读源码文件，几十毫秒，而且与 list() 用同一个入口，
+       不会出现两套算法判出两种状态。 */
+    const missingModules = new Set()
+    for (const entry of this.#entries.values()) {
+      if (!this.#fingerprints.has(entry.module)) missingModules.add(entry.module)
+    }
+    for (const module of missingModules) {
+      try {
+        this.#fingerprints.set(module, await this.#fingerprintOf(module))
+      } catch {
+        /* 算不出来就保持缺失：`#statusOf` 会把这类当 fresh，也就是**不删**。
+           宁可这一轮少清理，也不能删掉用户正在看的图。 */
+      }
+    }
+
+    /* 最旧的先删。mtime 主序、atime 次序：同一毫秒写入的两个文件靠 atime 分开，
+       两者都一样就按路径排，保证同一份输入永远淘汰同一批文件（可测）。 */
+    files.sort((a, b) => (a.mtime - b.mtime) || (a.atime - b.atime) || (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
+
+    const removedKeys = new Set()
+    const hashToKey = this.#hashToKey()
+    let freed = 0
+    let removed = 0
+    for (const file of files) {
+      if (total - freed <= this.#maxCacheBytes) break
+      /* 反查不到归属的文件不动：它要么是更早版本留下的、要么 key 已从索引消失，
+         两者都属于「不确定就别删」。 */
+      const key = hashToKey.get(file.hash)
+      if (key === undefined) continue
+      if (this.#isKeyPinned(key)) continue
+      try {
+        await unlink(file.path)
+      } catch {
+        continue
+      }
+      freed += file.size
+      removed += 1
+      removedKeys.add(key)
+    }
+
+    /* 删完同步索引：清掉渲染信息，让条目回到 `never`。**不删条目本身**——
+       历史上删过 entry，卡片会从面板上凭空消失，用户以为源码里被删了。
+       这里只保留识别字段，与 `forget()` 的处理保持一致。 */
+    for (const key of removedKeys) {
+      const entry = this.#entries.get(key)
+      if (entry === undefined) continue
+      this.#entries.set(key, {
+        key: entry.key,
+        module: entry.module,
+        fqn: entry.fqn,
+        previewId: entry.previewId,
+        title: entry.title,
+        ...(entry.flavored === true ? { flavored: true } : {}),
+        ...(entry.previewParams === undefined ? {} : { previewParams: entry.previewParams }),
+      })
+      this.#dirty = true
+    }
+    /* 沿用现有原子写（临时文件 + rename），不直接覆盖 index.json。 */
+    await this.#save()
+    if (removed > 0) {
+      this.#logger.info?.(`[android-mirror-pane] preview 缓存超出上限，清理 ${removed} 个文件、${Math.round(freed / 1024)} KB`)
+    }
+    return { removed, freed, total: total - freed, max: this.#maxCacheBytes }
+  }
+
+  /**
+   * 一条 entry 现在处于四态里的哪个。与 `list()` 里的判定必须一致。
+   * @param {PreviewEntry} entry
+   * @returns {'fresh' | 'stale' | 'never' | 'error'}
+   */
+  #statusOf(entry) {
+    const current = this.#fingerprints.get(entry.module)
+    if (entry.renderedAt === undefined) return entry.lastError === undefined ? 'never' : 'error'
+    if (entry.lastError !== undefined) return 'error'
+    if (current !== undefined && entry.sourceHash !== current) return 'stale'
+    return 'fresh'
+  }
+
   /**
    * 重算全部模块的指纹。
+   *
+   * 范围是 `#modules` **并上索引里实际出现过的模块**。只看 `#modules` 是个
+   * 隐蔽的坑：自动发现之后索引里可能有十几个模块，而 `#modules` 还是内置的
+   * 那五个，于是其余模块的指纹永远缺失，`#statusOf` 把「查不到指纹」当成
+   * `fresh`——列表里那些模块的图永远不会被标成「源码已变」，LRU 也永远
+   * 不敢删它们。
+   *
    * @returns {Promise<void>}
    */
   async #refreshFingerprints() {
     const next = new Map()
-    for (const module of this.#modules) {
+    const modules = new Set(this.#modules)
+    for (const entry of this.#entries.values()) modules.add(entry.module)
+    for (const module of modules) {
       next.set(module, await this.#fingerprintOf(module))
     }
     this.#fingerprints = next
@@ -719,17 +1019,7 @@ export class PreviewService {
     await this.#refreshFingerprints()
     const entries = []
     for (const entry of this.#entries.values()) {
-      const current = this.#fingerprints.get(entry.module)
-      let status
-      if (entry.renderedAt === undefined) {
-        status = entry.lastError === undefined ? 'never' : 'error'
-      } else if (entry.lastError !== undefined) {
-        status = 'error'
-      } else if (current !== undefined && entry.sourceHash !== current) {
-        status = 'stale'
-      } else {
-        status = 'fresh'
-      }
+      const status = this.#statusOf(entry)
       entries.push({
         key: entry.key,
         module: entry.module,
@@ -756,6 +1046,7 @@ export class PreviewService {
       const moduleOrder = (order.get(a.module) ?? 999) - (order.get(b.module) ?? 999)
       return moduleOrder !== 0 ? moduleOrder : a.title.localeCompare(b.title)
     })
+    const jobs = this.jobList()
     return {
       projectRoot: this.#projectRoot,
       repoLabel: repoLabel(this.#projectRoot),
@@ -769,7 +1060,12 @@ export class PreviewService {
         error: entries.filter((e) => e.status === 'error').length,
       },
       scan: this.scanState,
-      jobs: this.jobList(),
+      jobs,
+      /* 进度聚合放在这里，前端不必自己数 `jobs`——那数组只保留有限条历史，
+         一次 42 个的批量会把早先的条目挤掉，数出来的总数会中途缩水。 */
+      jobSummary: summarizeJobs(jobs),
+      batches: this.batchList(),
+      cache: { maxMb: this.maxCacheMb },
     }
   }
 
@@ -842,6 +1138,9 @@ export class PreviewService {
       for (const target of targets) {
         const module = target.path
         const moduleDir = join(this.#projectRoot, module)
+        /* dispose 之后不再为后续模块起子进程：scan.running 会在 finally 里
+           复位，剩下的模块交给下一次 reconcile。 */
+        if (this.#disposed) break
         if (!existsSync(moduleDir)) {
           this.#scan.progress.done += 1
           continue
@@ -934,6 +1233,8 @@ export class PreviewService {
     if (now - this.#studioProbe.at < STUDIO_PROBE_TTL_MS && this.#studioProbe.value !== undefined) {
       return this.#studioProbe.value
     }
+    /* dispose 之后不再探测：`studio check` 也是子进程。 */
+    if (this.#disposed) return { available: false }
     let value = { available: false }
     try {
       const run = spawnCli(this.#cli, ['studio', 'check'], { cwd: this.#projectRoot, timeoutMs: 30_000 })
@@ -967,8 +1268,118 @@ export class PreviewService {
    */
   async enqueue(key) {
     await this.#load()
+    const outcome = this.#enqueueOne(key)
+    if (outcome === undefined) throw new Error(`索引里没有这个 preview：${key}，请先刷新索引`)
+    return outcome
+  }
+
+  /**
+   * 把一批 preview 一次性排进**同一条串行队列**。
+   *
+   * 为什么是「一次排一批」而不是「循环调用 enqueue」：单个渲染 2–8 秒，
+   * 42 个 preview 要 3 分钟以上，前端一个一个点不可行。批量排队的价值不在于
+   * 并行（并行的两个 Gradle 会争同一个目录锁，实测反而更慢），而在于
+   * 一次请求就把整个模块铺进队列，之后 Gradle 预热与 daemon 复用都在
+   * 同一条链上连续发生。
+   *
+   * 三件事按这个顺序：
+   * 1. 去掉重复的 key（同一批里出现两次只排一次）；
+   * 2. 跳过已经在排队/在跑的 key（复用那个 job，不新造——`enqueue` 的
+   *    `duplicate` 判重语义保持不变，这里只是把结果汇总）；
+   * 3. 其余的按传入顺序依次入队，**逐个排队**，不是一个批次一个 task：
+   *    这样每个 key 都有自己的 job 状态，某个失败只影响它自己，后面的照常跑。
+   *
+   * @param {string[]} keys - 一批 `${module}::${fqn}`。
+   * @returns {Promise<{ batchId: string, jobIds: string[], skipped: string[], unknown: string[], total: number }>}
+   */
+  async enqueueMany(keys) {
+    await this.#load()
+    const list = Array.isArray(keys) ? keys.filter((key) => typeof key === 'string' && key.length > 0) : []
+    const batch = {
+      id: `batch-${shortHash(`${Date.now()}:${Math.random()}`, 10)}`,
+      keys: [],
+      jobIds: [],
+      skipped: [],
+      unknown: [],
+      running: false,
+      /** jobId → 终态；由 `#settleBatch` 填写，批次进度只认它。 */
+      settled: new Map(),
+      startedAt: Date.now(),
+      finishedAt: undefined,
+    }
+    const seen = new Set()
+    for (const key of list) {
+      if (seen.has(key)) continue
+      seen.add(key)
+      batch.keys.push(key)
+      const outcome = this.#enqueueOne(key)
+      if (outcome === undefined) {
+        /* 索引里没有这个 key：不报错整批，只记下来让调用方知道。 */
+        batch.unknown.push(key)
+        continue
+      }
+      if (outcome.duplicate === true) batch.skipped.push(key)
+      batch.jobIds.push(outcome.jobId)
+    }
+    /* 复用的 job（duplicate）可能早就结束或正在跑：先把已知终态填进去，
+       否则进度会从「已完成 0/42」开始，看起来像又跑了一遍。 */
+    for (const id of batch.jobIds) {
+      const job = this.#jobs.get(id)
+      if (job === undefined) continue
+      if (job.status !== 'queued' && job.status !== 'running') batch.settled.set(id, job.status)
+    }
+    batch.running = batch.settled.size < batch.jobIds.length
+    if (batch.running !== true) batch.finishedAt = Date.now()
+    this.#batches.set(batch.id, batch)
+    this.#trimBatches()
+    return {
+      batchId: batch.id,
+      jobIds: batch.jobIds,
+      skipped: batch.skipped,
+      unknown: batch.unknown,
+      total: batch.jobIds.length,
+    }
+  }
+
+  /**
+   * 把某个模块下的全部 preview 排进队列。
+   *
+   * 面板上的操作是「渲染这个模块」，所以这条路径比传一大串 key 更常用。
+   * 只排该模块**需要更新**的（非 fresh）还是全部，由调用方通过 `options`
+   * 决定；默认全排，因为「批量渲染」的语义就是「把这一批都刷新一遍」。
+   *
+   * @param {string} module - 如 `feature/account/impl`。
+   * @param {{ onlyOutdated?: boolean }} [options] - `onlyOutdated` 跳过已经 fresh 的。
+   * @returns {Promise<{ batchId: string, jobIds: string[], skipped: string[], unknown: string[], total: number }>}
+   */
+  async enqueueModule(module, options = {}) {
+    await this.#load()
+    /* 指纹得先有值，`onlyOutdated` 才判得准；list() 顺带刷新了它。 */
+    if (options.onlyOutdated === true) await this.#refreshFingerprints()
+    const keys = []
+    for (const entry of this.#entries.values()) {
+      if (entry.module !== module) continue
+      if (options.onlyOutdated === true && this.#statusOf(entry) === 'fresh') continue
+      keys.push(entry.key)
+    }
+    if (keys.length === 0) {
+      return { batchId: '', jobIds: [], skipped: [], unknown: [], total: 0 }
+    }
+    return this.enqueueMany(keys)
+  }
+
+  /**
+   * 入队一个 key 的内部实现；索引里没有时返回 `undefined`。
+   *
+   * 抽出来是因为 `enqueue` 要抛异常、批量路径要跳过，两者语义不同但
+   * 判重与排队必须走同一段代码——`duplicate` 的行为是前端依赖的。
+   *
+   * @param {string} key
+   * @returns {{ jobId: string, queued: boolean, duplicate: boolean } | undefined}
+   */
+  #enqueueOne(key) {
     const entry = this.#entries.get(key)
-    if (entry === undefined) throw new Error(`索引里没有这个 preview：${key}，请先刷新索引`)
+    if (entry === undefined) return undefined
     /* 同一个 preview 已经在队列里就复用那个任务，避免连点堆出五六个 Gradle。 */
     for (const job of this.#jobs.values()) {
       if (job.key === key && (job.status === 'queued' || job.status === 'running')) {
@@ -990,8 +1401,84 @@ export class PreviewService {
     this.#queue = this.#queue.then(() => this.#run(job)).catch((error) => {
       job.status = 'error'
       job.error = String(error?.message ?? error)
+      job.finishedAt = Date.now()
+      this.#finish(job)
     })
     return { jobId: id, queued: true, duplicate: false }
+  }
+
+  /**
+   * 某个 job 落定时，把它记进所属批次的 `settled`。
+   *
+   * 为什么不用定时轮询：轮询有两个坑——第一次 tick 要等 200 ms（前端会看到
+   * 一个已经跑完的 batch 仍显示 `active: true`），以及 job 记录被历史裁剪
+   * 之后就数不到了（42 个的批量跑到一半，进度反而往回退）。在 `#run` 的
+   * finally 里同步记账，两个坑都不存在。
+   *
+   * @param {any} job
+   * @returns {void}
+   */
+  #settleBatch(job) {
+    if (this.#batches.size === 0) return
+    for (const batch of this.#batches.values()) {
+      if (batch.jobIds.includes(job.id) !== true) continue
+      batch.settled.set(job.id, job.status)
+      if (batch.settled.size >= batch.jobIds.length && batch.running === true) {
+        batch.running = false
+        batch.finishedAt = Date.now()
+      }
+    }
+  }
+
+  /** 批次记录只留最近几条。 */
+  #trimBatches() {
+    if (this.#batches.size <= MAX_BATCH_HISTORY) return
+    const finished = [...this.#batches.values()]
+      .filter((batch) => batch.running !== true)
+      .sort((a, b) => (a.finishedAt ?? a.startedAt) - (b.finishedAt ?? b.startedAt))
+    for (const stale of finished.slice(0, this.#batches.size - MAX_BATCH_HISTORY)) this.#batches.delete(stale.id)
+  }
+
+  /**
+   * 批次快照，带实时进度。
+   *
+   * 进度只认 `settled`（job 落定时记下的终态），不数 `#jobs`——那本字典会
+   * 被历史裁剪挤掉条目，数出来的总数会中途缩水。
+   *
+   * @returns {object[]}
+   */
+  batchList() {
+    return [...this.#batches.values()].map((batch) => {
+      let done = 0
+      let failed = 0
+      let cancelled = 0
+      for (const status of batch.settled.values()) {
+        if (status === 'error') failed += 1
+        else if (status === 'cancelled') cancelled += 1
+        else done += 1
+      }
+      const total = batch.jobIds.length
+      const finished = done + failed + cancelled
+      const running = total - finished
+      return {
+        id: batch.id,
+        total,
+        done,
+        failed,
+        cancelled,
+        /* `queued` / `running` 只表示「还没落定」，前端画进度条用的是
+           `finished / total`，这两个字段留着方便排查「卡在哪」。 */
+        queued: running,
+        running: 0,
+        finished,
+        percent: total === 0 ? 100 : Math.round((finished / total) * 100),
+        skipped: batch.skipped.length,
+        unknown: batch.unknown.length,
+        active: batch.running === true,
+        startedAt: batch.startedAt,
+        finishedAt: batch.finishedAt,
+      }
+    })
   }
 
   /**
@@ -1000,15 +1487,25 @@ export class PreviewService {
    * @returns {Promise<void>}
    */
   async #run(job) {
+    /* 所有终态（cancelled / entry 没了 / done / error）都要走 `#finish`，
+       否则批次进度会永远停在「还有 1 个没跑完」。 */
     if (this.#disposed) {
       job.status = 'cancelled'
+      job.finishedAt = Date.now()
+      this.#finish(job)
       return
     }
-    if (job.status === 'cancelled') return
+    if (job.status === 'cancelled') {
+      job.finishedAt = job.finishedAt ?? Date.now()
+      this.#finish(job)
+      return
+    }
     const entry = this.#entries.get(job.key)
     if (entry === undefined) {
       job.status = 'error'
       job.error = '索引里已经没有这个 preview'
+      job.finishedAt = Date.now()
+      this.#finish(job)
       return
     }
     job.status = 'running'
@@ -1036,6 +1533,17 @@ export class PreviewService {
       })
       this.#dirty = true
       await this.#save()
+      /* 渲染成功是**唯一**会让缓存目录变大的时刻（一次多出 png + json），
+         所以清理挂在这里：只在真正增长之后跑，不在 list() 那条首屏路径上
+         扫目录。此刻用户正在等图，多出几十毫秒无感。
+         失败路径不清理：那时没有新文件（中间产物已在 #renderWithHeadless
+         的 finally 里删掉），扫一遍目录纯属浪费，而且「失败不清旧图」
+         的承诺不该被一次清理顺手违背。 */
+      try {
+        await this.trimCache()
+      } catch (error) {
+        this.#logger.warn?.(`[android-mirror-pane] preview 缓存清理失败：${String(error?.message ?? error)}`)
+      }
     } catch (error) {
       job.status = 'error'
       job.error = String(error?.message ?? error)
@@ -1050,14 +1558,38 @@ export class PreviewService {
     } finally {
       this.#activeChild = undefined
       job.finishedAt = Date.now()
-      /* 只留最近 20 条任务记录，队列状态不用无限长。 */
-      if (this.#jobs.size > 20) {
-        const finished = [...this.#jobs.values()]
-          .filter((item) => item.status !== 'queued' && item.status !== 'running')
-          .sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0))
-        for (const stale of finished.slice(0, this.#jobs.size - 20)) this.#jobs.delete(stale.id)
-      }
+      this.#finish(job)
     }
+  }
+
+  /**
+   * job 落定后的统一收尾：记批次进度、裁历史。
+   * @param {any} job
+   * @returns {void}
+   */
+  #finish(job) {
+    this.#settleBatch(job)
+    this.#trimJobs()
+  }
+
+  /**
+   * 裁掉过老的 job 记录。
+   *
+   * 只裁已经结束的：批量渲染 42 个时有 41 个还 `queued`，如果按「总数超了就删」
+   * 去删，正在排队的任务会被挤掉，前端看到进度倒退、卡片也不再显示「排队中」。
+   * 所以先数「活跃」的条数，超出上限的那部分只从已结束的记录里裁——
+   * 活跃的多到超过上限时就不裁（宁可多留几条记录，也不能丢任务）。
+   *
+   * @returns {void}
+   */
+  #trimJobs() {
+    const active = [...this.#jobs.values()].filter((job) => job.status === 'queued' || job.status === 'running')
+    const limit = Math.max(MAX_JOB_HISTORY, active.length)
+    if (this.#jobs.size <= limit) return
+    const finished = [...this.#jobs.values()]
+      .filter((job) => job.status !== 'queued' && job.status !== 'running')
+      .sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0))
+    for (const stale of finished.slice(0, this.#jobs.size - limit)) this.#jobs.delete(stale.id)
   }
 
   /**
@@ -1067,8 +1599,13 @@ export class PreviewService {
    * @returns {Promise<{ renderer: string, width: number, height: number, treeNodes: number }>}
    */
   async #renderEntry(entry) {
+    /* dispose 之后一律不再起子进程：面板已经关掉，此时再拉一个 Gradle
+       只会让用户在后台看到一个跑满 CPU 的 daemon 却找不到是谁。 */
+    if (this.#disposed) throw new Error('面板已关闭，渲染取消')
     await mkdir(this.#dir, { recursive: true })
     const studio = await this.studioStatus()
+    /* 探测 Studio 也要几百毫秒，期间可能被 dispose；spawn 前再确认一次。 */
+    if (this.#disposed) throw new Error('面板已关闭，渲染取消')
     const preferStudio = this.#renderer === 'studio' || (this.#renderer === 'auto' && studio.available)
     /* flavored 模块的 headless 路径是死的：CLI 硬编码找 `debug` 变体，
        而实际变体叫 `StandardDebug`，跑起来必然失败。所以这里直接给出
@@ -1147,7 +1684,7 @@ export class PreviewService {
     } else {
       tree = { width: 0, height: 0, renderer: 'headless', nodes: [] }
     }
-    await writeFile(this.treePath(entry.key), JSON.stringify(tree), 'utf8')
+    await this.#writeTree(entry.key, tree)
     return {
       renderer: 'headless',
       width: tree.width,
@@ -1182,7 +1719,7 @@ export class PreviewService {
     this.#activeChild = undefined
     if (!existsSync(imagePath)) throw new Error('渲染失败：Studio 没有生成图片')
     const tree = normalizeStudioTree(result.stdout)
-    await writeFile(this.treePath(entry.key), JSON.stringify(tree), 'utf8')
+    await this.#writeTree(entry.key, tree)
     return { renderer: 'studio', width: tree.width, height: tree.height, treeNodes: tree.nodes.length }
   }
 
@@ -1273,7 +1810,7 @@ export class PreviewService {
     })
     this.#dirty = true
     await this.#save()
-    for (const path of [this.imagePath(key), this.treePath(key)]) {
+    for (const path of [this.imagePath(key), this.treePath(key), this.baselineTreePath(key)]) {
       try { await unlink(path) } catch { /* 已经没有就算了 */ }
     }
     /* 顺手把这棵树的中间产物目录也清掉，别让缓存目录越攒越大。 */
@@ -1287,7 +1824,19 @@ export class PreviewService {
     this.#activeChild?.kill()
     this.#activeChild = undefined
     for (const job of this.#jobs.values()) {
-      if (job.status === 'queued') job.status = 'cancelled'
+      if (job.status === 'queued') {
+        job.status = 'cancelled'
+        job.finishedAt = Date.now()
+        this.#settleBatch(job)
+      }
+    }
+    /* 批次也一起收尾：dispose 之后 `#watchBatch` 不会再看到 pending，
+       但立刻标掉更准确——面板关掉时进度条不该停在 40%。 */
+    for (const batch of this.#batches.values()) {
+      if (batch.running === true) {
+        batch.running = false
+        batch.finishedAt = Date.now()
+      }
     }
   }
 }

@@ -15,6 +15,10 @@
 #                                                  #   注意：声明了 productFlavors 的模块只能用 Studio——CLI 的
 #                                                  #   headless 路径会硬编码找 `debug` 变体（实际叫 StandardDebug）而失败
 #   preview.studioProject: 'Z3'                    # Studio 里打开的项目名；不写则按项目路径自动匹配
+#   preview.maxCacheMb: 300                        # 渲染图与语义树的磁盘上限，单位 MB；缺省 300，0 表示不自动清理
+#                                                  #   超限时在每次渲染成功后按文件修改时间从旧到新删除，
+#                                                  #   正在排队/渲染的 preview 与「是最新」的条目不会被删
+#                                                  #   缓存按项目根分桶，不同仓库互不影响
 #
 # 例：
 #   - insert:

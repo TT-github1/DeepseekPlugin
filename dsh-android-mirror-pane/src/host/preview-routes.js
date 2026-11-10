@@ -9,6 +9,7 @@
  * - `POST /preview/list`      读索引 + 现状，**不渲染**
  * - `POST /preview/reconcile` 重扫模块，发现有/无的 @Preview
  * - `POST /preview/render`    `{key}` → `{jobId}`，异步入队
+ * - `POST /preview/render-batch` `{keys?}` 或 `{module?}` → 一批 jobId，异步入队
  * - `POST /preview/status`    队列状态（可带 jobId 只问一条）
  * - `POST /preview/forget`    丢掉一条缓存
  * - `GET  /preview/image?key=`  PNG 字节
@@ -21,6 +22,8 @@
 
 import { readFile } from 'node:fs/promises'
 import { isTrustedRequest } from './routes.js'
+import { diffTrees } from './preview-diff.js'
+import { summarizeJobs } from './preview.js'
 
 /** preview 路由前缀，跟投屏的 `/stream` 等分开。 */
 export const PREVIEW_PREFIX = '/_dsh/dsh-android-mirror-pane/preview'
@@ -188,6 +191,58 @@ export function createPreviewHandlers(hub) {
       }
     },
 
+    /**
+     * `POST /preview/render-batch` —— 一批 preview 一次性入队。
+     *
+     * body：`{ sessionId?, keys?: string[], module?: string }`
+     * - `keys` 与 `module` 二选一：给了 `keys` 就按它排；只给 `module` 就是
+     *   「这个模块下的全部 preview」。
+     * - 两者都给时以 `keys` 为准并忽略 `module`（更明确的那个赢），
+     *   响应里会说明。
+     * - 可选 `onlyOutdated: true`：跳过已经是最新（fresh）的，只补要更新的。
+     *
+     * 与 `/render` 一样立刻返回，不等渲染完成；进度看 `/status` 或 `/list`
+     * 回带的 `jobs` + `jobSummary`。
+     */
+    async renderBatch(req, res, url) {
+      if (!isTrustedRequest(req)) {
+        sendJson(res, 403, { error: 'forbidden' })
+        return
+      }
+      let body
+      try {
+        body = await readJson(req)
+      } catch (error) {
+        sendJson(res, 400, { error: 'bad-request', message: String(error?.message ?? error) })
+        return
+      }
+      const keys = Array.isArray(body?.keys)
+        ? body.keys.filter((key) => typeof key === 'string' && key.length > 0)
+        : undefined
+      const module = typeof body?.module === 'string' && body.module.length > 0 ? body.module : undefined
+      const onlyOutdated = body?.onlyOutdated === true
+      if ((keys === undefined || keys.length === 0) && module === undefined) {
+        sendJson(res, 400, { error: 'invalid-batch', message: '需要 keys 或 module 之一' })
+        return
+      }
+      const service = hub.serviceFor(sessionFrom(url, body))
+      try {
+        let outcome
+        if (keys !== undefined && keys.length > 0) {
+          outcome = await service.enqueueMany(keys)
+          if (module !== undefined) outcome.ignoredModule = module
+        } else {
+          outcome = await service.enqueueModule(module, { onlyOutdated })
+        }
+        /* 202：已经接受、正在异步跑。一个都没排进去时用 200 说明「无事可做」——
+           比如模块里的 preview 全都 fresh，或者 keys 全在队列里。 */
+        const accepted = Array.isArray(outcome?.jobIds) && outcome.jobIds.length > 0
+        sendJson(res, accepted ? 202 : 200, { ...outcome, accepted })
+      } catch (error) {
+        sendJson(res, 400, { error: 'batch-failed', message: String(error?.message ?? error) })
+      }
+    },
+
     /** `POST /preview/status` —— 队列；带 `{jobId}` 时只回那一条加全量。 */
     async status(req, res, url) {
       if (!isTrustedRequest(req)) {
@@ -195,9 +250,21 @@ export function createPreviewHandlers(hub) {
         return
       }
       const { body, sessionId } = await readBody(req, url)
-      const jobs = hub.serviceFor(sessionId).jobList()
+      const service = hub.serviceFor(sessionId)
+      const jobs = service.jobList()
       const wanted = typeof body?.jobId === 'string' ? jobs.find((job) => job.id === body.jobId) : undefined
-      sendJson(res, 200, { jobs, ...(wanted === undefined ? {} : { job: wanted }) })
+      /* `jobs` 的字段与含义保持不变（前端在用）；进度聚合是**新增**字段：
+         total / done / failed 等，前端算进度不必自己数数组。 */
+      sendJson(res, 200, {
+        jobs,
+        summary: summarizeJobs(jobs),
+        /* 批次快照也带上：`summary` 是**全局队列**口径，分母含历史 job，
+           用它做「本次批量」的进度会让百分比偏小（跑完 3 个、队列里还有
+           20 条旧记录时显示 13%）。前端要显示批次进度就需要这条，
+           否则只能等 `/list` 那一次快照，轮询期间进度是静止的。 */
+        batches: service.batchList(),
+        ...(wanted === undefined ? {} : { job: wanted }),
+      })
     },
 
     /** `POST /preview/forget` —— `{key}` 丢掉一条缓存。 */
@@ -246,6 +313,39 @@ export function createPreviewHandlers(hub) {
     },
 
     /** `GET /preview/tree?key=` —— 归一化语义树。 */
+    /**
+     * `GET /preview/diff?key=&base=` —— 当前语义树与某个历史版本的差异。
+     *
+     * `base` 是要对比的历史快照键（可省略，省略时用「上一次渲染」）。
+     * 对比结果只读、不落盘：语义 diff 是纯计算，算完就丢，
+     * 不需要把 diff 本身也缓存起来。
+     */
+    async diff(req, res, url) {
+      if (!isTrustedRequest(req)) {
+        sendJson(res, 403, { error: 'forbidden' })
+        return
+      }
+      const key = queryValue(url, 'key')
+      if (key === undefined) {
+        sendJson(res, 400, { error: 'missing-key' })
+        return
+      }
+      const service = hub.serviceFor(sessionFrom(url, undefined))
+      const current = await service.readTree(key)
+      if (current === undefined) {
+        sendJson(res, 404, { error: 'no-tree', message: '这个 preview 还没有语义树' })
+        return
+      }
+      /* 基线取「上一次渲染」：Service 侧统一给出，没有历史就返回 undefined，
+         前端据此显示「首次渲染，无可对比基线」而不是报错。 */
+      const base = await service.readBaselineTree?.(key)
+      const result = diffTrees(base ?? null, current)
+      sendJson(res, 200, {
+        ...result,
+        hasBaseline: base !== undefined,
+      })
+    },
+
     async tree(req, res, url) {
       if (!isTrustedRequest(req)) {
         sendJson(res, 403, { error: 'forbidden' })
@@ -288,10 +388,12 @@ export function mountPreviewRoutes(webServer, hub) {
     ['/list', handlers.list],
     ['/reconcile', handlers.reconcile],
     ['/render', handlers.render],
+    ['/render-batch', handlers.renderBatch],
     ['/status', handlers.status],
     ['/forget', handlers.forget],
     ['/image', handlers.image],
     ['/tree', handlers.tree],
+    ['/diff', handlers.diff],
   ]
   const disposers = routes.map(([suffix, handler]) =>
     webServer.register({ kind: 'exact', path: `${PREVIEW_PREFIX}${suffix}`, handler: guard(handler) }),
