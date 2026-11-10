@@ -5,6 +5,9 @@
   "description": "Android 投屏与操控面板：在 DSH 右侧栏实时显示真机画面，支持点击、拖拽与截图",
   "type": "module",
   "main": "index.js",
+  "scripts": {
+    "test": "node --test test/*.test.js"
+  },
   "exports": {
     ".": "./index.js",
     "./client": "./client.js",

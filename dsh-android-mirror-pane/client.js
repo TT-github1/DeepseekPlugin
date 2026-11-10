@@ -75,6 +75,45 @@ if (window.__DAMP_LOADED__ !== true) {
             'act.device': '设备',
             'tab.screen': '画面',
             'tab.log': '日志',
+            'tab.preview': '预览',
+            'pv.search': '按页面名或 FQN 搜索',
+            'pv.refresh': '刷新索引',
+            'pv.refreshing': '正在扫描 @Preview…',
+            'pv.allModules': '全部模块',
+            'pv.onlyStale': '只看要更新的',
+            'pv.stale': '源码已变',
+            'pv.fresh': '是最新',
+            'pv.never': '从未渲染',
+            'pv.error': '渲染失败',
+            'pv.render': '渲染',
+            'pv.rerender': '重新渲染',
+            'pv.queued': '排队中',
+            'pv.running': '渲染中',
+            'pv.back': '返回',
+            'pv.noCli': '没有找到 Android CLI，装好后点「刷新索引」',
+            'pv.empty': '还没有索引到任何 @Preview，点「刷新索引」扫一遍',
+            'pv.emptyFilter': '当前筛选下没有条目',
+            'pv.total': '共',
+            'pv.tree': '语义树',
+            'pv.treeAll': '显示全部节点',
+            'pv.treeSemantic': '只显示有语义的',
+            'pv.treeEmpty': '这个 preview 没有语义树数据',
+            'pv.treeNodes': '节点',
+            'pv.size': '尺寸',
+            'pv.rendered': '渲染于',
+            'pv.renderer': '渲染器',
+            'pv.treeHint': '悬停一行可在图上看到它的边界',
+            'pv.noImage': '还没有图，点「渲染」',
+            'pv.studioReady': 'Studio 就绪',
+            'pv.studioAway': '无 Studio，走 headless',
+            'pv.errorTitle': '渲染失败原因',
+            'pv.detailHint': '共',
+            'pv.ofNodes': '个节点',
+            'pv.repo': '仓库',
+            'pv.needsStudio': '需 Studio',
+            'pv.needsStudioHint': '该模块带 flavors，只能用已打开本项目的 Studio 渲染',
+            'pv.discovering': '正在发现模块…',
+            'pv.discovery': '发现',
             'log.target': '日志来源',
             'log.all': '全部应用',
             'log.follow': '当前',
@@ -136,6 +175,45 @@ if (window.__DAMP_LOADED__ !== true) {
             'act.device': 'Device',
             'tab.screen': 'Screen',
             'tab.log': 'Logcat',
+            'tab.preview': 'Preview',
+            'pv.search': 'Search by page name or FQN',
+            'pv.refresh': 'Rescan',
+            'pv.refreshing': 'Scanning @Preview…',
+            'pv.allModules': 'All modules',
+            'pv.onlyStale': 'Needs update only',
+            'pv.stale': 'Source changed',
+            'pv.fresh': 'Up to date',
+            'pv.never': 'Never rendered',
+            'pv.error': 'Render failed',
+            'pv.render': 'Render',
+            'pv.rerender': 'Re-render',
+            'pv.queued': 'Queued',
+            'pv.running': 'Rendering',
+            'pv.back': 'Back',
+            'pv.noCli': 'Android CLI not found — install it, then press Rescan',
+            'pv.empty': 'No @Preview indexed yet — press Rescan',
+            'pv.emptyFilter': 'Nothing matches the current filter',
+            'pv.total': 'Total',
+            'pv.tree': 'Semantics',
+            'pv.treeAll': 'Show every node',
+            'pv.treeSemantic': 'Semantic nodes only',
+            'pv.treeEmpty': 'No semantics data for this preview',
+            'pv.treeNodes': 'nodes',
+            'pv.size': 'Size',
+            'pv.rendered': 'Rendered',
+            'pv.renderer': 'Renderer',
+            'pv.treeHint': 'Hover a row to see its bounds on the image',
+            'pv.noImage': 'No image yet — press Render',
+            'pv.studioReady': 'Studio ready',
+            'pv.studioAway': 'No Studio, using headless',
+            'pv.errorTitle': 'Why it failed',
+            'pv.detailHint': 'of',
+            'pv.ofNodes': 'nodes',
+            'pv.repo': 'Repo',
+            'pv.needsStudio': 'Needs Studio',
+            'pv.needsStudioHint': 'This module declares flavors; it can only render through Studio with this project open',
+            'pv.discovering': 'Discovering modules…',
+            'pv.discovery': 'discovery',
             'log.target': 'Log source',
             'log.all': 'All apps',
             'log.follow': 'Current',
@@ -204,6 +282,42 @@ if (window.__DAMP_LOADED__ !== true) {
 .damp-logmsg{flex:1 1 auto;min-width:0}
 .damp-logsection{color:color-mix(in srgb,currentColor 50%,transparent);padding:2px 0;border-top:1px dashed color-mix(in srgb,currentColor 14%,transparent);margin-top:3px}
 .damp-input{flex:1 1 auto;min-width:0;font:inherit;font-size:11px;padding:2px 6px;border-radius:6px;border:1px solid color-mix(in srgb,currentColor 22%,transparent);background:transparent;color:inherit}
+/* 预览页：工具条固定在顶部，卡片网格自己滚。 */
+.damp-pv{display:flex;flex-direction:column;height:100%;min-height:0;gap:5px;padding:6px}
+.damp-pvbar{display:flex;flex-wrap:wrap;gap:4px;align-items:center;flex:0 0 auto}
+.damp-pvsearch{max-width:170px;flex:0 1 170px}
+.damp-pvcount{font-size:10.5px;opacity:.6;font-variant-numeric:tabular-nums}
+.damp-pvgrid{flex:1 1 auto;min-height:0;overflow:auto;display:grid;grid-template-columns:repeat(auto-fill,minmax(98px,1fr));gap:6px;align-content:start;padding:2px}
+.damp-pvcard{display:flex;flex-direction:column;gap:3px;padding:4px;border-radius:7px;border:1px solid color-mix(in srgb,currentColor 14%,transparent);background:color-mix(in srgb,currentColor 4%,transparent);cursor:pointer;text-align:left;font:inherit;color:inherit;min-width:0}
+.damp-pvcard:hover{background:color-mix(in srgb,currentColor 9%,transparent)}
+.damp-pvthumb{position:relative;width:100%;aspect-ratio:9/16;border-radius:5px;overflow:hidden;background:color-mix(in srgb,#888 14%,transparent);display:flex;align-items:center;justify-content:center}
+.damp-pvthumb img{width:100%;height:100%;object-fit:contain;display:block}
+.damp-pvthumb[data-empty="true"]{font-size:10px;opacity:.55;text-align:center;padding:4px}
+.damp-pvname{font-size:10.5px;line-height:1.3;overflow:hidden;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;word-break:break-word}
+.damp-pvmeta{display:flex;align-items:center;gap:4px;font-size:9.5px;opacity:.62;min-width:0}
+.damp-pvmeta span{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.damp-pvdot{flex:0 0 auto;width:6px;height:6px;border-radius:50%;background:#999}
+.damp-pvdot[data-s="fresh"]{background:#34c759}
+.damp-pvdot[data-s="stale"]{background:#e5a50a}
+.damp-pvdot[data-s="never"]{background:#8e8e93}
+.damp-pvdot[data-s="error"]{background:#e05252}
+.damp-pvdot[data-s="running"]{background:#0a84ff;animation:damp-pulse 1s ease-in-out infinite}
+@keyframes damp-pulse{50%{opacity:.3}}
+.damp-pvgroup{grid-column:1/-1;display:flex;align-items:center;gap:6px;font-size:10.5px;opacity:.6;padding:5px 2px 1px;border-top:1px dashed color-mix(in srgb,currentColor 14%,transparent);margin-top:2px}
+.damp-pvgroup:first-child{border-top:none;margin-top:0}
+/* 详情页：左图右树，窄面板下自动上下堆叠。 */
+.damp-pvdetail{display:flex;flex:1 1 auto;min-height:0;gap:6px}
+.damp-pvstage{position:relative;flex:1 1 58%;min-width:0;min-height:0;display:flex;align-items:center;justify-content:center;overflow:auto;border-radius:7px;background:color-mix(in srgb,#888 12%,transparent);padding:3px}
+.damp-pvstage img{max-width:100%;max-height:100%;display:block;object-fit:contain}
+.damp-pvbox{position:absolute;pointer-events:none;border:1.5px solid #0a84ff;border-radius:2px;box-shadow:0 0 0 1px #fff6;z-index:3}
+.damp-pvtree{flex:1 1 42%;min-width:0;min-height:0;overflow:auto;border-radius:7px;background:color-mix(in srgb,#888 8%,transparent);padding:3px 4px;font-family:ui-monospace,SFMono-Regular,"SF Mono",Menlo,monospace;font-size:10.5px;line-height:1.5}
+.damp-pvrow{display:flex;gap:5px;padding:1px 3px;border-radius:3px;cursor:default;white-space:nowrap}
+.damp-pvrow[data-hover="true"]{background:color-mix(in srgb,#0a84ff 18%,transparent)}
+.damp-pvrowtype{color:color-mix(in srgb,#0a84ff 72%,currentColor);flex:0 0 auto}
+.damp-pvrowtext{flex:1 1 auto;min-width:0;overflow:hidden;text-overflow:ellipsis;opacity:.92}
+.damp-pvrowbounds{flex:0 0 auto;opacity:.45;font-variant-numeric:tabular-nums}
+/* 窄到读不清时改成上下堆叠：语义树在下面，图在上面。 */
+@media (max-width:420px){.damp-pvdetail{flex-direction:column}.damp-pvstage{flex:1 1 45%}.damp-pvtree{flex:1 1 55%}}
 `
 
         /**
@@ -1154,9 +1268,367 @@ if (window.__DAMP_LOADED__ !== true) {
         }
 
         /**
-         * 面板外壳：两个标签页（画面 / 日志）。
-         * 分开是因为看画面要尽可能多的竖直空间，看日志要整屏高度；
-         * 塞进同一页两边都不够用。
+         * 拼一个「会话」查询串片段，供 GET 路由使用。
+         *
+         * 面板挂在会话上，会话决定扫哪个安卓仓库；POST 走请求体，
+         * GET（图片、语义树）只能用查询串，所以单独抽一个。
+         *
+         * @param {string | undefined} sessionId
+         * @returns {string}
+         */
+        function sessionQuery(sessionId) {
+          return typeof sessionId === 'string' && sessionId.length > 0
+            ? `sessionId=${encodeURIComponent(sessionId)}`
+            : ''
+        }
+
+        /**
+         * 预览详情：左边是渲染图，右边是语义树，两边按 bounds 联动。
+         *
+         * 联动是这一页存在的理由：只看图分不清「这个按钮到底多高」，
+         * 只看树不知道「这行对应屏幕哪儿」。所以树行的 hover 要在图上
+         * 画一个框，用的是语义树自带的 bounds，坐标和图的像素一一对应
+         * （两条渲染路径的 tree.width/height 就是出图尺寸，已实测一致）。
+         *
+         * @param {{ entry: any, job?: any, sessionId?: string, onBack: () => void, onRender: (key: string) => void }} props
+         */
+        function PreviewDetail(props) {
+          const { entry, job, sessionId, onBack, onRender } = props
+          const [tree, setTree] = React.useState(null)
+          const [treeError, setTreeError] = React.useState(null)
+          const [hover, setHover] = React.useState(null)
+          const [showAll, setShowAll] = React.useState(false)
+
+          /* 树与图一起失效：重新渲染后 renderedAt 变，两个 URL 都要跟着换。 */
+          React.useEffect(() => {
+            let alive = true
+            setTree(null)
+            setTreeError(null)
+            setHover(null)
+            if (entry.renderedAt === undefined) return () => { alive = false }
+            fetch(`${ROUTE}/preview/tree?${sessionQuery(sessionId)}&key=${encodeURIComponent(entry.key)}`)
+              .then((response) => (response.ok ? response.json() : Promise.reject(new Error(`HTTP ${response.status}`))))
+              .then((payload) => { if (alive) setTree(payload) })
+              .catch((cause) => { if (alive) setTreeError(String(cause?.message ?? cause)) })
+            return () => { alive = false }
+          }, [entry.key, entry.renderedAt, sessionId])
+
+          const imageUrl = entry.hasImage
+            ? `${ROUTE}/preview/image?${sessionQuery(sessionId)}&key=${encodeURIComponent(entry.key)}&v=${entry.renderedAt ?? 0}`
+            : undefined
+
+          /* 默认只显示有语义的节点：实测 headless 77 个节点里只有 16 个带语义，
+             整棵铺开反而找不到要看的那几行。 */
+          const nodes = tree?.nodes ?? []
+          const visible = showAll ? nodes : nodes.filter((node) => node.hasSemantics === true)
+          const scaleX = tree?.width ? 100 / tree.width : 0
+          const scaleY = tree?.height ? 100 / tree.height : 0
+          const box = hover === null || tree === null
+            ? null
+            : {
+              left: `${hover.bounds.left * scaleX}%`,
+              top: `${hover.bounds.top * scaleY}%`,
+              width: `${(hover.bounds.right - hover.bounds.left) * scaleX}%`,
+              height: `${(hover.bounds.bottom - hover.bounds.top) * scaleY}%`,
+            }
+
+          const statusText = job?.status === 'running'
+            ? L('pv.running')
+            : job?.status === 'queued' ? L('pv.queued') : undefined
+
+          return h('div', { className: 'damp-pv' },
+            h('div', { className: 'damp-pvbar' },
+              h('button', { className: 'damp-btn', onClick: onBack, title: L('pv.back') }, `← ${L('pv.back')}`),
+              h('span', { className: 'damp-pvname', style: { flex: '1 1 auto', WebkitLineClamp: '1' }, title: entry.fqn }, entry.title),
+              h('button', {
+                className: 'damp-btn damp-primary',
+                onClick: () => onRender(entry.key),
+              }, statusText ?? L('pv.rerender')),
+            ),
+            h('div', { className: 'damp-pvcount' },
+              entry.renderer !== undefined ? `${L('pv.renderer')} ${entry.renderer}` : null,
+              entry.width !== undefined ? ` · ${L('pv.size')} ${entry.width}×${entry.height}` : null,
+              tree !== null ? ` · ${L('pv.tree')} ${nodes.length} ${L('pv.ofNodes')}` : null,
+              entry.lastError !== undefined ? ` · ${L('pv.error')}` : null,
+            ),
+            /* 失败原因贴在最上面，而不是塞进 tooltip：它是这一页最该先看到的东西。 */
+            entry.lastError !== undefined
+              ? h('div', {
+                className: 'damp-pvcount',
+                style: { color: 'color-mix(in srgb,#e05252 80%,currentColor)', whiteSpace: 'pre-wrap', maxHeight: '72px', overflow: 'auto' },
+                title: entry.lastError,
+              }, `${L('pv.errorTitle')}：${entry.lastError}`)
+              : null,
+            h('div', { className: 'damp-pvdetail' },
+              h('div', { className: 'damp-pvstage' },
+                imageUrl === undefined
+                  ? h('div', { className: 'damp-empty' }, L('pv.noImage'))
+                  : h('img', { src: imageUrl, alt: entry.title }),
+                box === null ? null : h('div', { className: 'damp-pvbox', style: box }),
+              ),
+              h('div', { className: 'damp-pvtree' },
+                h('div', { className: 'damp-pvbar', style: { marginBottom: '3px' } },
+                  h('button', {
+                    className: 'damp-btn',
+                    'data-active': showAll ? 'true' : 'false',
+                    onClick: () => setShowAll((value) => !value),
+                    title: L('pv.treeAll'),
+                  }, showAll ? L('pv.treeAll') : L('pv.treeSemantic')),
+                  h('span', { className: 'damp-pvcount' }, `${visible.length}/${nodes.length}`),
+                ),
+                tree === null
+                  ? h('div', { className: 'damp-empty' }, treeError ?? L('pv.treeEmpty'))
+                  : visible.length === 0
+                    ? h('div', { className: 'damp-empty' }, L('pv.treeEmpty'))
+                    : visible.map((node) => h('div', {
+                      key: node.id,
+                      className: 'damp-pvrow',
+                      'data-hover': hover?.id === node.id ? 'true' : 'false',
+                      style: { paddingLeft: `${3 + node.depth * 7}px` },
+                      onMouseEnter: () => setHover(node),
+                      onMouseLeave: () => setHover((current) => (current?.id === node.id ? null : current)),
+                      title: `${node.type} (${node.bounds.left},${node.bounds.top}) - (${node.bounds.right},${node.bounds.bottom})`,
+                    },
+                      h('span', { className: 'damp-pvrowtype' }, node.type),
+                      node.text !== undefined ? h('span', { className: 'damp-pvrowtext' }, node.text) : null,
+                      node.text === undefined && node.contentDescription !== undefined
+                        ? h('span', { className: 'damp-pvrowtext', style: { opacity: '.7' } }, `“${node.contentDescription}”`)
+                        : null,
+                      h('span', { className: 'damp-pvrowbounds' }, `${node.bounds.right - node.bounds.left}×${node.bounds.bottom - node.bounds.top}`),
+                    )),
+                tree !== null && visible.length > 0
+                  ? h('div', { className: 'damp-pvcount', style: { padding: '4px 3px' } }, L('pv.treeHint'))
+                  : null,
+              ),
+            ),
+          )
+        }
+
+        /**
+         * 预览总览：按模块分组的卡片网格。
+         *
+         * 首屏只读索引、不触发任何渲染——40 个 preview 全渲染要 200 秒，
+         * 那是不可接受的等待。所以卡片要么显示上次的图（可能已过期，
+         * 用黄点标出来），要么显示灰底占位。
+         */
+        function PreviewTab(props) {
+          const sessionId = props?.sessionId
+          const [data, setData] = React.useState(null)
+          const [error, setError] = React.useState(null)
+          const [scanning, setScanning] = React.useState(false)
+          const [keyword, setKeyword] = React.useState('')
+          const [moduleFilter, setModuleFilter] = React.useState('')
+          const [onlyStale, setOnlyStale] = React.useState(false)
+          const [selectedKey, setSelectedKey] = React.useState(null)
+          /* 已提交但还没跑完的任务 id；用来在卡片上显示「渲染中」并驱动轮询。 */
+          const [jobs, setJobs] = React.useState([])
+          const alive = React.useRef(true)
+
+          React.useEffect(() => () => { alive.current = false }, [])
+
+          const apply = React.useCallback((payload) => {
+            if (!alive.current) return
+            setData(payload)
+            setJobs(Array.isArray(payload?.jobs) ? payload.jobs : [])
+          }, [])
+
+          const load = React.useCallback(() => post('/preview/list', { sessionId })
+            .then((payload) => { apply(payload); setError(null) })
+            .catch((cause) => { if (alive.current) setError(String(cause?.message ?? cause)) }), [apply, sessionId])
+
+          const rescan = React.useCallback(() => {
+            setScanning(true)
+            return post('/preview/reconcile', { sessionId })
+              .then((payload) => { apply(payload); setError(null) })
+              .catch((cause) => { if (alive.current) setError(String(cause?.message ?? cause)) })
+              .finally(() => { if (alive.current) setScanning(false) })
+          }, [apply, sessionId])
+
+          /* 首次进入：先读索引；索引是空的就自动扫一次，免得用户对着空面板发呆。
+             判断条件是「从没扫完过」（finishedAt 为空）——扫完但确实没有 preview
+             时不再反复触发，否则会陷入无休止的 Gradle 扫描。 */
+          React.useEffect(() => {
+            load()
+          }, [load])
+
+          const scanTriggered = React.useRef(false)
+          React.useEffect(() => {
+            if (data === null || scanTriggered.current) return
+            if (data.entries.length > 0) return
+            if (data.scan?.running === true) return
+            if (data.scan?.finishedAt !== undefined) return
+            scanTriggered.current = true
+            rescan()
+          }, [data, rescan])
+
+          /* 有任务在跑就轮询；跑完顺手重新取一次索引，让新图与状态一起更新。 */
+          const active = jobs.filter((job) => job.status === 'queued' || job.status === 'running')
+          const activeIds = active.map((job) => job.id).join(',')
+          React.useEffect(() => {
+            if (activeIds.length === 0) return undefined
+            const timer = setInterval(() => {
+              post('/preview/status', { sessionId })
+                .then((payload) => {
+                  const next = Array.isArray(payload?.jobs) ? payload.jobs : []
+                  if (!alive.current) return
+                  setJobs(next)
+                  const stillRunning = next.some((job) => job.status === 'queued' || job.status === 'running')
+                  if (!stillRunning) load()
+                })
+                .catch(() => {})
+            }, 1500)
+            return () => clearInterval(timer)
+          }, [activeIds, load, sessionId])
+
+          const render = React.useCallback((key) => {
+            post('/preview/render', { key, sessionId })
+              .then(() => post('/preview/status', { sessionId }))
+              .then((payload) => { if (alive.current && Array.isArray(payload?.jobs)) setJobs(payload.jobs) })
+              .catch((cause) => { if (alive.current) setError(String(cause?.message ?? cause)) })
+          }, [sessionId])
+
+          const entries = data?.entries ?? []
+          const modules = data?.modules ?? []
+          const jobByKey = new Map()
+          for (const job of jobs) {
+            if (job.status === 'queued' || job.status === 'running') jobByKey.set(job.key, job)
+          }
+
+          const filtered = (() => {
+            const kw = keyword.trim().toLowerCase()
+            return entries.filter((entry) => {
+              if (moduleFilter.length > 0 && entry.module !== moduleFilter) return false
+              /* 「只看要更新的」把从未渲染、已过期、失败三种都算进来——
+                 这三种都是「现在看到的不是最新」，这才是要动作的集合。 */
+              if (onlyStale && entry.status === 'fresh') return false
+              if (kw.length === 0) return true
+              return `${entry.title} ${entry.fqn} ${entry.module}`.toLowerCase().includes(kw)
+            })
+          })()
+
+          /* 选中项从最新的 entries 里取，这样重新渲染后它自动带上新图。 */
+          const selected = selectedKey === null ? null : entries.find((entry) => entry.key === selectedKey) ?? null
+
+          if (selected !== null) {
+            return h(PreviewDetail, {
+              entry: selected,
+              job: jobByKey.get(selected.key),
+              sessionId,
+              onBack: () => setSelectedKey(null),
+              onRender: render,
+            })
+          }
+
+          const groups = []
+          for (const entry of filtered) {
+            const last = groups[groups.length - 1]
+            if (last !== undefined && last.module === entry.module) last.entries.push(entry)
+            else groups.push({ module: entry.module, entries: [entry] })
+          }
+
+          return h('div', { className: 'damp-pv' },
+            h('div', { className: 'damp-pvbar' },
+              h('input', {
+                className: 'damp-input damp-pvsearch',
+                value: keyword,
+                placeholder: L('pv.search'),
+                onChange: (event) => setKeyword(event.target.value),
+              }),
+              h('select', {
+                className: 'damp-btn',
+                value: moduleFilter,
+                onChange: (event) => setModuleFilter(event.target.value),
+              },
+                h('option', { value: '' }, L('pv.allModules')),
+                modules.map((module) => h('option', { key: module, value: module }, module)),
+              ),
+              h('button', {
+                className: 'damp-btn',
+                'data-active': onlyStale ? 'true' : 'false',
+                onClick: () => setOnlyStale((value) => !value),
+                title: L('pv.onlyStale'),
+              }, L('pv.onlyStale')),
+              h('button', {
+                className: 'damp-btn',
+                'data-active': scanning ? 'true' : 'false',
+                disabled: scanning,
+                onClick: rescan,
+                title: L('pv.refresh'),
+              }, scanning ? L('pv.refreshing') : L('pv.refresh')),
+            ),
+            h('div', { className: 'damp-pvcount' },
+              data?.repoLabel !== undefined ? `${L('pv.repo')} ${data.repoLabel} · ` : null,
+              `${L('pv.total')} ${filtered.length}/${entries.length}`,
+              data?.counts !== undefined ? ` · ${L('pv.fresh')} ${data.counts.fresh} · ${L('pv.stale')} ${data.counts.stale}` : null,
+              data?.studio !== undefined ? ` · ${data.studio.available ? L('pv.studioReady') : L('pv.studioAway')}` : null,
+              active.length > 0 ? ` · ${L('pv.running')} ${active.length}` : null,
+              data?.scan?.discovery?.summary !== undefined ? ` · ${L('pv.discovery')} ${data.scan.discovery.summary}` : null,
+            ),
+            error !== null
+              ? h('div', { className: 'damp-pvcount', style: { color: 'color-mix(in srgb,#e05252 80%,currentColor)' } }, error)
+              : null,
+            data?.scan?.error !== undefined && data.scan.error !== null
+              ? h('div', {
+                className: 'damp-pvcount',
+                style: { color: 'color-mix(in srgb,#e5a50a 80%,currentColor)' },
+                title: data.scan.error,
+              }, data.scan.error)
+              : null,
+            data !== null && data.scan?.cliAvailable === false
+              ? h('div', { className: 'damp-pvcount' }, L('pv.noCli'))
+              : null,
+            h('div', { className: 'damp-pvgrid' },
+              entries.length === 0
+                ? h('div', { className: 'damp-empty' }, scanning
+                  ? `${L('pv.discovering')}${data?.scan?.progress !== undefined && data.scan.progress.total > 0
+                    ? ` ${data.scan.progress.done}/${data.scan.progress.total}` : ''}`
+                  : L('pv.empty'))
+                : filtered.length === 0
+                  ? h('div', { className: 'damp-empty' }, L('pv.emptyFilter'))
+                  : groups.map((group) => [
+                    h('div', { key: `g-${group.module}`, className: 'damp-pvgroup' },
+                      h('span', null, group.module),
+                      h('span', null, String(group.entries.length)),
+                    ),
+                    ...group.entries.map((entry) => {
+                      const job = jobByKey.get(entry.key)
+                      const status = job !== undefined ? (job.status === 'running' ? 'running' : 'never') : entry.status
+                      return h('button', {
+                        key: entry.key,
+                        className: 'damp-pvcard',
+                        onClick: () => setSelectedKey(entry.key),
+                        title: entry.fqn,
+                      },
+                        h('div', { className: 'damp-pvthumb', 'data-empty': entry.hasImage ? 'false' : 'true' },
+                          entry.hasImage
+                            ? h('img', {
+                              src: `${ROUTE}/preview/image?${sessionQuery(sessionId)}&key=${encodeURIComponent(entry.key)}&v=${entry.renderedAt ?? 0}`,
+                              alt: entry.title,
+                              loading: 'lazy',
+                            })
+                            : h('span', null, entry.title),
+                        ),
+                        h('div', { className: 'damp-pvname' }, entry.title),
+                        h('div', { className: 'damp-pvmeta' },
+                          h('span', { className: 'damp-pvdot', 'data-s': status }),
+                          h('span', null, job !== undefined
+                            ? (job.status === 'running' ? L('pv.running') : L('pv.queued'))
+                            : L(`pv.${entry.status}`)),
+                          entry.needsStudio === true
+                            ? h('span', { title: L('pv.needsStudioHint'), style: { opacity: '.8' } }, '· Studio')
+                            : null,
+                        ),
+                      )
+                    }),
+                  ]),
+            ),
+          )
+        }
+
+        /**
+         * 面板外壳：三个标签页（画面 / 日志 / 预览）。
+         * 分开是因为看画面要尽可能多的竖直空间，看日志要整屏高度，
+         * 看预览要整块宽度放卡片网格；塞进同一页都不够用。
          */
         function Body(props) {
           const [tab, setTab] = React.useState('screen')
@@ -1172,9 +1644,14 @@ if (window.__DAMP_LOADED__ !== true) {
                 'data-active': tab === 'log' ? 'true' : 'false',
                 onClick: () => setTab('log'),
               }, L('tab.log')),
+              h('button', {
+                className: 'damp-tab',
+                'data-active': tab === 'preview' ? 'true' : 'false',
+                onClick: () => setTab('preview'),
+              }, L('tab.preview')),
             ),
             h('div', { className: 'damp-tabpane' },
-              tab === 'screen' ? h(ScreenTab, props) : h(LogcatTab, props),
+              tab === 'screen' ? h(ScreenTab, props) : tab === 'log' ? h(LogcatTab, props) : h(PreviewTab, props),
             ),
           )
         }
